@@ -33,7 +33,7 @@ dashvector:
   DashScopeKey: "YOUR_DASHSCOPE_KEY" // 这个是文本向量的key
   DashScopeServiceName: "qwen" // 重要，需要和scope对应的服务名匹配
   DashVectorCollection: "YOUR_CLUSTER_NAME"
-  DashVectorEnd: "YOUR_VECTOR_END" 
+  DashVectorEnd: "YOUR_VECTOR_ENDPOINT" 
   DashVectorKey: "YOUR_DASHVECTOR_KEY" // 这个是DASHVECTOR的key
   DashVectorServiceName: "DashVector" // 重要，需要新建一个vector对应的服务
   SessionID: "XXX" // 可用可不用，主要用于重复初始化逻辑
@@ -62,7 +62,7 @@ redis: // 重要
 
 ```bash
 higress.io/backend-protocol: https
-higress.io/proxy-ssl-name: 
+higress.io/proxy-ssl-name: YOUR_ENDPOINT
 higress.io/proxy-ssl-server-name: on
 ```
 
