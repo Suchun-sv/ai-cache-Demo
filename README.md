@@ -70,7 +70,7 @@ higress.io/proxy-ssl-server-name: on
 
 # 2. 本地测试环境搭建和代码更新逻辑
 
-采用[ **Higress + LobeChat 快速搭建私人GPT助理**](https://github.com/alibaba/higress/issues/1023)的方式起两个docker容器进行本地测试，我配上了我的配置供各位参考：
+采用[ **Higress + LobeChat 快速搭建私人GPT助理**](https://github.com/alibaba/higress/issues/1023)的方式起两个Docker容器进行本地测试，我配上了我的配置供各位参考：
 
 ```bash
 version: '3.9'
@@ -110,11 +110,11 @@ services:
 
 ```
 
-主要更改了 Higress 的 image，environment 以及 volumes 的配置，启动和重启就是 `docker compose up -d`，类似的不赘述了。
+主要更改了 Higress 的 image，environment 以及 volumes 的配置，启动和重启就是 `Docker compose up -d`，类似的不赘述了。
 
 进一步地，我们需要了解本地代码编写的逻辑如何能反馈到测试环境中。
 
-为了和线上测试环境一致，本文采用的还是本地编写代码⇒ 本地编译 wasm 插件 ⇒  docker 打包镜像并上传 ⇒ 修改本地测试环境配置中的镜像版本 ⇒ 开始测试并打印日志
+为了和线上测试环境一致，本文采用的还是本地编写代码⇒ 本地编译 wasm 插件 ⇒  Docker 打包镜像并上传 ⇒ 修改本地测试环境配置中的镜像版本 ⇒ 开始测试并打印日志
 
 具体的伪代码如下:
 
