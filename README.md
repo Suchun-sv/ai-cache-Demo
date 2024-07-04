@@ -135,7 +135,7 @@ sudo bash -c \"sed -i 's|oci://registry.cn-hangzhou.aliyuncs.com/XXX:[0-9]*\\\\.
 
 [https://higress.io/zh-cn/docs/user/wasm-go/#在插件中请求外部服务](https://higress.io/zh-cn/docs/user/wasm-go/#%E5%9C%A8%E6%8F%92%E4%BB%B6%E4%B8%AD%E8%AF%B7%E6%B1%82%E5%A4%96%E9%83%A8%E6%9C%8D%E5%8A%A1)
 
-全部的代码在https://github.com/Suchun-sv/ai-cache-Demo上，这里简单讲讲思路和核心代码。一个直观的思路是:
+全部的代码在 [github](https://github.com/Suchun-sv/ai-cache-Demo?spm=a2c22.21852664.0.0.45972df20aJlUt) 上，这里简单讲讲思路和核心代码。一个直观的思路是:
 
 ```md
 1. query进来和redis中存的key匹配，若完全一致则直接返回
