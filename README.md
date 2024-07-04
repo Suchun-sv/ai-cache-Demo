@@ -254,13 +254,13 @@ return types.ActionPause
 
 # 4. 线上环境代码更新
 
-和本地环境类似，线上的环境也可以直接采用 `sed` 命令来更新wasm插件，但是需要注意的是，线上的环境配置(单指开源版）需要进入到 webshell 里面进行，看log也需要在配置好环境变量后进webshell执行 `tail -f /var/log/higress/gateway.log`。
+和本地环境类似，线上的环境也可以直接采用 `sed` 命令来更新 wasm 插件，但是需要注意的是，线上的环境配置(单指开源版）需要进入到 webshell 里面进行，看log也需要在配置好环境变量后进webshell执行 `tail -f /var/log/higress/gateway.log`。
 
 ```bash
 sudo bash -c \"sed -i 's|oci://registry.cn-hangzhou.aliyuncs.com/XXX:[0-9]*\\\\.[0-9]*\\\\.[0-9]*|oci://registry.cn-hangzhou.aliyuncs.com/XXX:$(cat version.txt)|g' data/wasmplugins/ai-cache-1.0.0.yaml\
 ```
 
-并且建议把log目录也挂载到NAS里来做日志持久化（参考本地环境配置的yaml）。不过这并不是SAE推荐的方法，可能会有潜在的并发问题。如有需求，可以考虑采用SLS服务来做日志持久化。
+并且建议把 log 目录也挂载到 NAS 里来做日志持久化（参考本地环境配置的 yaml ）。不过这并不是 SAE 推荐的方法，可能会有潜在的并发问题。如有需求，可以考虑采用 SLS 服务来做日志持久化。
 
 **最后如何保证每次的环境里的数据库都是处于初始化状态?** 一种方法是每次都删除数据库后重建，这虽然可行，但存在初始化延迟以及可能忘记删除的风险。我最开始尝试在 `ParseConfig` 中初始化一个唯一的 `session_uuid` 作为标识符，然后在请求向量数据库和 Redis 时加入这个字段。关于如何使用字段进行过滤（Dashvector 文档中有相关 SQL语法的介绍）。然而，由于 ParseConfig 函数并非只执行一次，我后来选择在更新配置时手动插入此标识符。为此，我编写了一个本地脚本来生成所需的 sed 命令，以自动化这一过程。
 
