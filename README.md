@@ -252,7 +252,7 @@ return types.ActionPause
 
 # 4. 线上环境代码更新
 
-和本地环境类似，线上的环境也可以直接采用 `sed` 命令来更新 wasm 插件，但是需要注意的是，线上的环境配置（单指开源版）需要进入到 webshell 里面进行，看log也需要在配置好环境变量后进webshell执行 `tail -f /var/log/higress/gateway.log`。
+和本地环境类似，线上的环境也可以直接采用 `sed` 命令来更新 wasm 插件，但是需要注意的是，线上的环境配置（单指开源版）需要进入到 webshell 里面进行，查看log 也需要在配置好环境变量后进 webshell 执行 `tail -f /var/log/higress/gateway.log` 命令。
 
 ```bash
 sudo bash -c \"sed -i 's|oci://registry.cn-hangzhou.aliyuncs.com/XXX:[0-9]*\\\\.[0-9]*\\\\.[0-9]*|oci://registry.cn-hangzhou.aliyuncs.com/XXX:$(cat version.txt)|g' data/wasmplugins/ai-cache-1.0.0.yaml\
