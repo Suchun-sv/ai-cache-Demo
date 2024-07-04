@@ -248,7 +248,7 @@ if err != nil {
 return types.ActionPause
 ```
 
-另外，该逻辑只有在返回值为 `types.Action` 的函数中才能用，如`onHttpResponseBody` 这个流式处理的函数是没法这么整的，只能保证请求发出去，但是因为没有阻塞操作，无法调用callback函数。如有需求，可以参照`wasm-go/pkg/wrapper/http_wrapper.go`加上信号变量修改。
+另外，该逻辑只有在返回值为 `types.Action` 的函数中才能用，如`onHttpResponseBody` 这个流式处理的函数是没法类似地处理，只能保证请求发出去，但是因为没有阻塞操作，无法调用callback函数。如有需求，可以参照`wasm-go/pkg/wrapper/http_wrapper.go`加上信号变量修改。
 
 # 4. 线上环境代码更新
 
