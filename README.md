@@ -8,7 +8,7 @@
 
 # 0. 背景
 
-我们要在Higress网关中编写 WebAssembly(wasm) 插件，使得在 http 请求的各个阶段（requestHeader，requestBody，responseHeader，responseBody）能够将相应的请求或返回捕获进行业务逻辑的处理。具体到本比赛，主要需要实现的是缓存对大模型的请求（openai接口的形式）在本地（或云数据库），并设计语义级别的缓存命中逻辑来实现降低响应请求且减少 token 费用的目的。
+我们要在 Higress 网关中编写 WebAssembly（wasm）插件，使得在 http 请求的各个阶段（requestHeader，requestBody，responseHeader，responseBody）能够将相应的请求或返回捕获进行业务逻辑的处理。具体到本比赛，主要需要实现的是缓存对大模型的请求（openai接口的形式）在本地（或云数据库），并设计语义级别的缓存命中逻辑来实现降低响应请求且减少 token 费用的目的。
 
 ![图1: AI-Cache](DashScope%E6%96%87%E6%9C%AC%E5%90%91%E9%87%8F+DashVector%E4%BA%91%E5%8E%9F%E7%94%9F%E5%90%91%E9%87%8F%E6%95%B0%E6%8D%AE%E5%BA%93Demo%E6%9C%AC%E5%9C%B0%E4%B8%8E%E7%BA%BF%E4%B8%8ASAE%E7%8E%AF%E5%A2%83%E6%90%AD%E5%BB%BA%EF%BC%88%E7%BA%BF%20ab24d58c5a2046e6b84cd2187f320976/Untitled.png)
 
@@ -30,15 +30,15 @@
 
 首先简单的在各家注册并获取到 token，注意 DashVector 的 endpoint 是每个用户唯一的，所以需要单独记录。可以简单的把配置记录如下。另外注意最新版本插件名若为 "ai-cache" 可能会报错？可以做些简单修改
 
-```jsx
+```bash
 Dash:
-  DashScopeKey: "YOUR DASHSCOPE KEY" // 这个是文本向量的key
-  DashScopeServiceName: "qwen" // 重要，需要和scope对应的服务名匹配
-  DashVectorCollection: "YOUR CLUSTER NAME"
-  DashVectorEnd: "YOUR VECTOR END" 
-  DashVectorKey: "YOUR DASHVECTOR KEY" // 这个是DASHVECTOR的key
-  DashVectorServiceName: "DashVector" // 重要，需要新建一个vector对应的服务
-  SessionID: "XXX" // 可用可不用，主要用于重复初始化逻辑
+  dashScopeKey: "YOUR DASHSCOPE KEY" // 这个是文本向量的key
+  dashScopeServiceName: "qwen" // 重要，需要和scope对应的服务名匹配
+  dashVectorCollection: "YOUR CLUSTER NAME"
+  dashVectorEnd: "YOUR VECTOR END" 
+  dashVectorKey: "YOUR DASHVECTOR KEY" // 这个是DASHVECTOR的key
+  dashVectorServiceName: "DashVector" // 重要，需要新建一个vector对应的服务
+  sessionID: "XXX" // 可用可不用，主要用于重复初始化逻辑
 redis: // 重要
   serviceName: "redis.static"
   timeout: 2000
@@ -121,21 +121,19 @@ services:
 ```bash
 cd ${workspaceFolder}/higress/plugins/wasm-go
 PLUGIN_NAME=ai-cache EXTRA_TAGS=proxy_wasm_version_0_2_100 make build 
-修改版本号 (version.txt) // 这步可以自动化更新，也就是说每次编译自动更新版本号，代码太简单就不在这写了
+修改版本号（version.txt）// 这步可以自动化更新，也就是说每次编译自动更新版本号，代码太简单就不在这写了
 export cur_version=$(cat ${workspaceFolder}/version.txt) && docker build -t [YOUR IMAGE BASE URL]:$cur_version -f Dockerfile . && docker push [YOUR IMAGE BASE URL]:$cur_version
 // 这步很重要，可以修改本地测试环境配置中的镜像版本，就不需要每次再去控制台修改了
 sudo bash -c \"sed -i 's|oci://registry.cn-hangzhou.aliyuncs.com/XXX:[0-9]*\\\\.[0-9]*\\\\.[0-9]*|oci://registry.cn-hangzhou.aliyuncs.com/XXX:$(cat version.txt)|g' data/wasmplugins/ai-cache-1.0.0.yaml\
 ```
 
-如果你用VSCode，建议把这些代码写在 tasks.json 里。当然写成脚本，然后每次直接启动也行。
+如果你用 VSCode，建议把这些代码写在 tasks.json 里。当然写成脚本，然后每次直接启动也行。
 
 # 3. 文本向量请求逻辑及缓存命中逻辑编写
 
-本小节开始写具体的代码了，但是首先得明白现有的wasm不支持直接调用外部服务，也就是没法直接调现成的api sdk代码。只能走封装好的调用外部请求接口：
+本小节开始写具体的代码了，但是首先需要了解现有的 wasm 不支持直接调用外部服务，也就是没法直接调现成的 api sdk 代码。只能走封装好的调用外部请求接口：[如何在插件中请求外部服务](https://higress.io/zh-cn/docs/user/wasm-go/#%E5%9C%A8%E6%8F%92%E4%BB%B6%E4%B8%AD%E8%AF%B7%E6%B1%82%E5%A4%96%E9%83%A8%E6%9C%8D%E5%8A%A1)。
 
-[https://higress.io/zh-cn/docs/user/wasm-go/#在插件中请求外部服务](https://higress.io/zh-cn/docs/user/wasm-go/#%E5%9C%A8%E6%8F%92%E4%BB%B6%E4%B8%AD%E8%AF%B7%E6%B1%82%E5%A4%96%E9%83%A8%E6%9C%8D%E5%8A%A1)
-
-全部的代码在 [github](https://github.com/Suchun-sv/ai-cache-Demo?spm=a2c22.21852664.0.0.45972df20aJlUt) 上，这里简单讲讲思路和核心代码。一个直观的思路是:
+全部的代码在 [github](https://github.com/Suchun-sv/ai-cache-Demo?spm=a2c22.21852664.0.0.45972df20aJlUt) 上，这里简单讲讲思路和核心代码。首先，本文采用的直观的思路是:
 
 ```md
 1. query进来和redis中存的key匹配，若完全一致则直接返回
@@ -149,7 +147,7 @@ sudo bash -c \"sed -i 's|oci://registry.cn-hangzhou.aliyuncs.com/XXX:[0-9]*\\\\.
 
 ## 3.1 外部服务声明和注册
 
-可以看到，难点主要在于如何实现 1-5 的连续外部服务调用。首先需要声明外部服务:
+可以看到，难点主要在于如何实现 1-5 的连续外部服务调用。在 Higress 相关的配置上，我们首先需要声明外部服务:
 
 ```bash
 DashVectorClient      wrapper.HttpClient `yaml:"-" json:"-"`
@@ -171,7 +169,7 @@ c.DashVectorInfo.DashScopeClient = wrapper.NewClusterClient(wrapper.DnsCluster{
 })
 ```
 
-这里的ParseConfig函数是在http请求的各个阶段回调函数（requestHeader，requestBody，responseHeader，responseBody)之前的注册函数，但是似乎wasm插件会反复执行这个ParseConfig函数，并非在启动之后只执行一次？
+这里的 `ParseConfig` 函数是在 http 请求的各个阶段回调函数（requestHeader，requestBody，responseHeader，responseBody）之前的注册函数，但是似乎 wasm 插件会反复执行这个 ParseConfig 函数，并非在启动之后只执行一次？
 
 ## 3.2 连续callback实现连续服务调用
 
@@ -254,14 +252,14 @@ return types.ActionPause
 
 # 4. 线上环境代码更新
 
-和本地环境类似，线上的环境也可以直接采用 `sed` 命令来更新 wasm 插件，但是需要注意的是，线上的环境配置(单指开源版）需要进入到 webshell 里面进行，看log也需要在配置好环境变量后进webshell执行 `tail -f /var/log/higress/gateway.log`。
+和本地环境类似，线上的环境也可以直接采用 `sed` 命令来更新 wasm 插件，但是需要注意的是，线上的环境配置（单指开源版）需要进入到 webshell 里面进行，看log也需要在配置好环境变量后进webshell执行 `tail -f /var/log/higress/gateway.log`。
 
 ```bash
 sudo bash -c \"sed -i 's|oci://registry.cn-hangzhou.aliyuncs.com/XXX:[0-9]*\\\\.[0-9]*\\\\.[0-9]*|oci://registry.cn-hangzhou.aliyuncs.com/XXX:$(cat version.txt)|g' data/wasmplugins/ai-cache-1.0.0.yaml\
 ```
 
-并且建议把 log 目录也挂载到 NAS 里来做日志持久化（参考本地环境配置的 yaml ）。不过这并不是 SAE 推荐的方法，可能会有潜在的并发问题。如有需求，可以考虑采用 SLS 服务来做日志持久化。
+并且建议把 log 目录也挂载到 NAS 里来做日志持久化（参考本地环境配置的 yaml ）。不过这并不是 SAE 推荐的方法，可能会有潜在的 NAS 并发问题。如有需求，可以考虑采用 SLS 日志服务来做日志持久化。
 
-**最后如何保证每次的环境里的数据库都是处于初始化状态?** 一种方法是每次都删除数据库后重建，这虽然可行，但存在初始化延迟以及可能忘记删除的风险。我最开始尝试在 `ParseConfig` 中初始化一个唯一的 `session_uuid` 作为标识符，然后在请求向量数据库和 Redis 时加入这个字段。关于如何使用字段进行过滤（ Dashvector 文档中有相关 SQL 语法的介绍）。然而，由于 `ParseConfig` 函数并非只执行一次，我后来选择在更新配置时手动插入此标识符。为此，我编写了一个本地脚本来生成所需的 sed 命令，以自动化这一过程。
+**最后如何保证每次的环境里的数据库都是处于初始化状态?** 一种方法是每次都删除数据库后重建，这虽然可行，但存在初始化延迟以及可能忘记删除的风险。我最开始尝试在 `ParseConfig` 中初始化一个唯一的 `session_uuid` 作为标识符，然后在请求向量数据库和 Redis 时加入这个字段。关于如何使用字段进行过滤（ Dashvector 文档中有相关 SQL 语法的介绍）。然而，由于 `ParseConfig` 函数并非只执行一次，我后来选择在更新配置时手动插入此标识符。为此，我编写了一个本地脚本来生成所需的 `sed` 命令，以自动化这一过程。
 
 **最后恭祝大家能取得好成绩，有问题可以在群里@我（苏淳sv），或者在github上发issue。**
