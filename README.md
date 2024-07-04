@@ -8,7 +8,7 @@
 
 # 0. 背景
 
-我们要在Higress网关中编写 WebAssembly(wasm)插件，使得在http请求的各个阶段（requestHeader，requestBody，responseHeader，responseBody)能够将相应的请求或返回捕获进行业务逻辑的处理。具体到本比赛，主要需要实现的是缓存对大模型的请求（openai接口的形式）在本地（或云数据库），并设计语义级别的缓存命中逻辑来实现降低响应请求且减少token费用的目的。
+我们计划在 Higress 网关中开发一个 WebAssembly (Wasm) 插件，该插件将在 HTTP 请求的各个阶段（包括 requestHeader、requestBody、responseHeader、responseBody）进行介入，以便捕获相应的请求或响应数据，并执行定制的业务逻辑处理，实现对大型模型接口（如 OpenAI）的请求数据进行本地或云数据库缓存，并设计一个基于语义级别的缓存命中逻辑。通过这种方式，我们旨在降低响应时间并减少 Token 的消耗，从而提高系统效率并降低运营成本。
 
 ![图1: AI-Cache](DashScope%E6%96%87%E6%9C%AC%E5%90%91%E9%87%8F+DashVector%E4%BA%91%E5%8E%9F%E7%94%9F%E5%90%91%E9%87%8F%E6%95%B0%E6%8D%AE%E5%BA%93Demo%E6%9C%AC%E5%9C%B0%E4%B8%8E%E7%BA%BF%E4%B8%8ASAE%E7%8E%AF%E5%A2%83%E6%90%AD%E5%BB%BA%EF%BC%88%E7%BA%BF%20ab24d58c5a2046e6b84cd2187f320976/Untitled.png)
 
@@ -26,15 +26,15 @@
 
 ## 1.1 新建AI-cache插件并编写配置
 
-首先简单的在各家注册并获取到token，注意dashvector的endpoint是每个用户唯一的，所以需要单独记录。可以简单的把配置记录如下，注意最新版本插件名若为ai-cache可能会报错？可以做些简单修改
+首先，我们需要在相关服务平台进行注册并获取对应的访问令牌（token）。特别注意，Dashvector 的服务端点（endpoint）是针对每个用户唯一设定的，因此需要进行个别记录。可以按照以下简单格式来记录这些配置信息。针对插件名称的问题。可能会存在 "ai-cache"与现有插件冲突的问题，这可能导致一些错误。为避免这种情况，建议进行一些名称上的简单修改。
 
 ```jsx
 dashvector:
-  DashScopeKey: "YOUR DASHSCOPE KEY" // 这个是文本向量的key
+  DashScopeKey: "YOUR_DASHSCOPE_KEY" // 这个是文本向量的key
   DashScopeServiceName: "qwen" // 重要，需要和scope对应的服务名匹配
-  DashVectorCollection: "YOUR CLUSTER NAME"
-  DashVectorEnd: "YOUR VECTOR END" 
-  DashVectorKey: "YOUR DASHVECTOR KEY" // 这个是DASHVECTOR的key
+  DashVectorCollection: "YOUR_CLUSTER_NAME"
+  DashVectorEnd: "YOUR_VECTOR_END" 
+  DashVectorKey: "YOUR_DASHVECTOR_KEY" // 这个是DASHVECTOR的key
   DashVectorServiceName: "DashVector" // 重要，需要新建一个vector对应的服务
   SessionID: "XXX" // 可用可不用，主要用于重复初始化逻辑
 redis: // 重要
@@ -60,17 +60,17 @@ redis: // 重要
 
 ![Untitled](DashScope%E6%96%87%E6%9C%AC%E5%90%91%E9%87%8F+DashVector%E4%BA%91%E5%8E%9F%E7%94%9F%E5%90%91%E9%87%8F%E6%95%B0%E6%8D%AE%E5%BA%93Demo%E6%9C%AC%E5%9C%B0%E4%B8%8E%E7%BA%BF%E4%B8%8ASAE%E7%8E%AF%E5%A2%83%E6%90%AD%E5%BB%BA%EF%BC%88%E7%BA%BF%20ab24d58c5a2046e6b84cd2187f320976/Untitled%205.png)
 
-```jsx
+```bash
 higress.io/backend-protocol: https
-higress.io/proxy-ssl-name: YOUR END POINT
+higress.io/proxy-ssl-name: 
 higress.io/proxy-ssl-server-name: on
 ```
 
 # 2. 本地测试环境搭建和代码更新逻辑
 
-采用[ **Higress + LobeChat 快速搭建私人GPT助理**](https://github.com/alibaba/higress/issues/1023)的方式起两个docker容器进行本地测试，我配上了我的配置供各位参考：
+对于本地测试环境的搭建，采用[ **Higress + LobeChat 快速搭建私人GPT助理**](https://github.com/alibaba/higress/issues/1023)的方式启动两个docker容器进行本地测试，我配上了我的配置供各位参考：
 
-```jsx
+```bash
 version: '3.9'
 
 networks:
@@ -116,7 +116,7 @@ services:
 
 具体的伪代码如下:
 
-```jsx
+```bash
 cd ${workspaceFolder}/higress/plugins/wasm-go
 PLUGIN_NAME=ai-cache EXTRA_TAGS=proxy_wasm_version_0_2_100 make build 
 修改版本号 (version.txt) // 这步可以自动化更新，也就是说每次编译自动更新版本号，代码太简单就不在这写了
@@ -129,27 +129,26 @@ sudo bash -c \"sed -i 's|oci://registry.cn-hangzhou.aliyuncs.com/XXX:[0-9]*\\\\.
 
 # 3. 文本向量请求逻辑及缓存命中逻辑编写
 
-本小节终于开始写具体的代码了，但是首先得明白现有的wasm不支持直接调用外部服务，也就是没法直接调现成的api sdk代码。只能走封装好的调用外部请求接口：
+本小节开始编写具体的业务逻辑代码，但是首先得明白现有的wasm不支持直接调用外部服务，也就是没法直接调现成的api sdk代码。只能使用封装好的接口来调用外部请求接口：[如何在wasm插件中请求外部服务](https://higress.io/zh-cn/docs/user/wasm-go/#%E5%9C%A8%E6%8F%92%E4%BB%B6%E4%B8%AD%E8%AF%B7%E6%B1%82%E5%A4%96%E9%83%A8%E6%9C%8D%E5%8A%A1)
 
-[https://higress.io/zh-cn/docs/user/wasm-go/#在插件中请求外部服务](https://higress.io/zh-cn/docs/user/wasm-go/#%E5%9C%A8%E6%8F%92%E4%BB%B6%E4%B8%AD%E8%AF%B7%E6%B1%82%E5%A4%96%E9%83%A8%E6%9C%8D%E5%8A%A1)
 
-全部的代码在https://github.com/Suchun-sv/ai-cache-Demo上，这里简单讲讲思路和核心代码。一个直观的思路是:
+全部的代码在[Demo](https://github.com/Suchun-sv/ai-cache-Demo)上，这里简单讲讲思路和核心代码。一个直观的思路是:
 
-```jsx
-1.query进来和redis中存的key匹配，若完全一致则直接返回
-2.否则请求text_embdding接口将query转换为query_embedding
-3.用quer_embedding和向量数据库中的向量做ANN search，返回最接近的key，并用阈值过滤
-4.若大于阈值，舍去，本轮cache未命中
-5.若小于阈值，则再次调用redis对新key做匹配。
-6.在response阶段请求向量数据库新增query/query_emebdding
-7.在response阶段请求redis新增key/LLM返回结果
+```md
+1. query进来和redis中存的key匹配，若完全一致则直接返回
+2. 否则请求text_embdding接口将query转换为query_embedding
+3. 用quer_embedding和向量数据库中的向量做ANN search，返回最接近的key，并用阈值过滤
+4. 若大于阈值，舍去，本轮cache未命中
+5. 若小于阈值，则再次调用redis对新key做匹配
+6. 在response阶段请求向量数据库新增query/query_emebdding
+7. 在response阶段请求redis新增key/LLM返回结果
 ```
 
 ## 3.1 外部服务声明和注册
 
 可以看到，难点主要在于如何实现1-5的连续外部服务调用。首先需要声明外部服务:
 
-```jsx
+```bash
 	DashVectorClient      wrapper.HttpClient `yaml:"-" json:"-"`
 	DashScopeClient       wrapper.HttpClient `yaml:"-" json:"-"`
 	redisClient    wrapper.RedisClient `yaml:"-" json:"-"`
@@ -157,7 +156,7 @@ sudo bash -c \"sed -i 's|oci://registry.cn-hangzhou.aliyuncs.com/XXX:[0-9]*\\\\.
 
 并且在ParseConfig函数中注册外部服务：
 
-```jsx
+```go
 	c.DashVectorInfo.DashVectorClient = wrapper.NewClusterClient(wrapper.DnsCluster{
 		ServiceName: c.DashVectorInfo.DashVectorServiceName,
 		Port:        443,
@@ -170,13 +169,13 @@ sudo bash -c \"sed -i 's|oci://registry.cn-hangzhou.aliyuncs.com/XXX:[0-9]*\\\\.
 	})
 ```
 
-这里的ParseConfig函数是在http请求的各个阶段回调函数（requestHeader，requestBody，responseHeader，responseBody)之前的注册函数，但是似乎wasm插件会反复执行这个ParseConfig函数，并非在启动之后只执行一次？
+这里的ParseConfig函数是在http请求的各个阶段回调函数（requestHeader，requestBody，responseHeader，responseBody）之前的注册函数，但是似乎wasm插件会反复执行这个ParseConfig函数，并非在启动之后只执行一次？
 
 ## 3.2 连续callback实现连续服务调用
 
-以onHttpRequestBody函数为例，代码需要写并发逻辑而非简单顺序逻辑，（我上次写还是本科计网，哈哈）。因而主体的函数代码是需要返回types.Action，也就是阻塞还是继续执行。我们目前的逻辑需要在处理完缓存命中逻辑之后才能继续执行操作，因此主体函数需要返回types.Pause, 根据我们的处理逻辑调用的外部服务的回调函数中执行proxywasm.ResumeHttpRequest()或者直接返回proxywasm.SendHttpResponse，取决于是否命中。
+以onHttpRequestBody函数为例，代码需要写并发逻辑而非简单顺序逻辑。因而主体的函数代码是需要返回types.Action，也就是阻塞还是继续执行。我们目前的逻辑需要在处理完缓存命中逻辑之后才能继续执行操作，因此主体函数需要返回types.Pause，根据我们的处理逻辑调用的外部服务的回调函数中执行proxywasm.ResumeHttpRequest()或者直接返回proxywasm.SendHttpResponse，取决于是否命中。
 
-```jsx
+```go
 	err := config.redisClient.Get(config.CacheKeyPrefix+key, func(response resp.Value) {
 		if err := response.Error(); err != nil || response.IsNull() {
 			if err != nil {
@@ -249,18 +248,18 @@ sudo bash -c \"sed -i 's|oci://registry.cn-hangzhou.aliyuncs.com/XXX:[0-9]*\\\\.
 	return types.ActionPause
 ```
 
-另外，该逻辑只有在返回值为types.Action的函数中才能用，如onHttpResponseBody这个流式处理的函数是没法这么整的，只能保证请求发出去，但是因为没有阻塞操作，无法调用callback函数。如果代码能力强，可以参照`wasm-go/pkg/wrapper/http_wrapper.go`加上信号变量修改。（我就算了）
+需要注意的是，此缓存逻辑只能在返回 types.Action 类型的函数中使用，例如 `onHttpResponseBody`。由于`onHttpResponseBody`是一个流式处理函数，它不支持类似的缓存逻辑。这是因为在流式处理中，请求确实会被发送出去，但由于缺乏阻塞操作，无法触发回调函数。为解决这一问题，可以参考`wasm-go/pkg/wrapper/http_wrapper.go`中的实现，通过添加信号变量来进行必要的修改。
 
 # 4. 线上环境代码更新
 
-和本地环境类似，直接采用sed命令，但是需要注意的是，线上的环境配置(单指开源版）需要进入到webshell里面进行，看log也需要在配置好环境变量后进webshell tail -f /var/log/higress/gateway.log。
+操作过程中，线上的测试环境也可以类似于本地环境的方式使用`sed`命令来处理配置。但请注意，在线上的环境（特指开源版本）中，所有配置修改需要通过进入webshell来完成。此外，若需查看日志，应先确保环境变量已正确配置，然后通过webshell使用` tail -f /var/log/higress/gateway.log`命令来实时跟踪日志文件。
 
-```jsx
+```bash
 sudo bash -c \"sed -i 's|oci://registry.cn-hangzhou.aliyuncs.com/XXX:[0-9]*\\\\.[0-9]*\\\\.[0-9]*|oci://registry.cn-hangzhou.aliyuncs.com/XXX:$(cat version.txt)|g' data/wasmplugins/ai-cache-1.0.0.yaml\
 ```
 
-并且建议把log目录也挂载到NAS里防止白跑。（参考本地环境配置的yaml)
+并且建议把log目录也挂载到NAS来做日志持久化（参考本地环境配置的yaml）。不过这不是SAE推荐的方法，可以考虑用阿里云的日志服务来做日志持久化替代（SLS）。
 
-这里还有个小trick和大家分享讨论，如何保证每次的环境里的数据库都是最新的。如果每次都删库重建是可以的，就是会有初始化来不及和忘记删的问题。我刚开始是在ParseConfig中初始化唯一的session_uuid作为对应，在请求向量数据库和redis的时候加上该field。（如何用field过滤在dashvector中有提，是写个附带的sql语法）。但是由于ParseConfig函数并不是只执行一次，我换成了在更新配置的时候手动写入。这样本地写个脚本生成需要执行的sed命令即可。
+**最后再讨论如何在每次线上测试的时候保证数据库为空**。一种方法是每次都删除数据库后重建，这虽然可行，但存在初始化延迟以及可能忘记删除的风险。最开始，我尝试在 `ParseConfig`中初始化一个唯一的`session_uuid`作为标识符，然后在请求向量数据库和`Redis`时加入这个字段（关于如何使用字段进行过滤，Dashvector 文档中有相关 SQL 语法的介绍）。然而，由于`ParseConfig`函数并非只执行一次，我后来选择在更新配置的yaml文件时手动插入此标识符。
 
 **最后恭祝大家能取得好成绩，有问题可以在群里@我（苏淳sv），或者在github上发issue。**
