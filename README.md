@@ -30,16 +30,16 @@
 
 首先简单的在各家注册并获取到 token，注意 DashVector 的 endpoint 是每个用户唯一的，所以需要单独记录。可以简单的把配置记录如下。另外注意最新版本插件名若为 "ai-cache" 可能会报错？可以做些简单修改
 
-```bash
+```yaml
 Dash:
-  dashScopeKey: "YOUR DASHSCOPE KEY" // 这个是文本向量的key
-  dashScopeServiceName: "qwen" // 重要，需要和scope对应的服务名匹配
-  dashVectorCollection: "YOUR CLUSTER NAME"
-  dashVectorEnd: "YOUR VECTOR END" 
-  dashVectorKey: "YOUR DASHVECTOR KEY" // 这个是DASHVECTOR的key
-  dashVectorServiceName: "DashVector" // 重要，需要新建一个vector对应的服务
-  sessionID: "XXX" // 可用可不用，主要用于重复初始化逻辑
-redis: // 重要
+  dashScopeKey: "YOUR_DASHSCOPE_KEY" # 这个是文本向量的key
+  dashScopeServiceName: "qwen" # 重要，需要和scope对应的服务名匹配
+  dashVectorCollection: "YOUR_CLUSTER_NAME"
+  dashVectorEnd: "YOUR_VECTOR_END" 
+  dashVectorKey: "YOUR_DASHVECTOR_KEY" # 这个是DASHVECTOR的key
+  dashVectorServiceName: "DashVector.dns" # 重要，需要新建一个vector对应的DNS服务 (见下文)
+  sessionID: "XXX" # 可用可不用，主要用于重复初始化逻辑
+redis: # 重要
   serviceName: "redis.static"
   timeout: 2000
 ```
@@ -64,7 +64,7 @@ redis: // 重要
 
 ```bash
 higress.io/backend-protocol: https
-higress.io/proxy-ssl-name: YOUR_ENDPOINT
+higress.io/proxy-ssl-name: YOUR_DASHVECTO_ENDPOINT
 higress.io/proxy-ssl-server-name: on
 ```
 
@@ -72,7 +72,7 @@ higress.io/proxy-ssl-server-name: on
 
 采用[ **Higress + LobeChat 快速搭建私人GPT助理**](https://github.com/alibaba/higress/issues/1023)的方式起两个Docker容器进行本地测试，我配上了我的配置供各位参考：
 
-```bash
+```yaml
 version: '3.9'
 
 networks:
@@ -81,9 +81,9 @@ networks:
 
 services:
   higress:
-    image: registry.cn-hangzhou.aliyuncs.com/ztygw/aio-redis:1.4.0-rc.1
+    image: registry.cn-hangzhou.aliyuncs.com/ztygw/aio-redis:1.4.1-rc.1
     environment:
-      - GATEWAY_COMPONENT_LOG_LEVEL=misc:error,wasm:debug // 重要，开启日志
+      - GATEWAY_COMPONENT_LOG_LEVEL=misc:error,wasm:debug # 重要，开启日志
       - CONFIG_TEMPLATE=ai-proxy
       - DEFAULT_AI_SERVICE=qwen
       - DASHSCOPE_API_KEY= [YOUR_KEY]
@@ -94,7 +94,7 @@ services:
       - "9001:8001/tcp"
     volumes:
       - 本地data目录:/data
-      - 本地log目录:/var/log/higress/ //重要，方便你在restrat之后查看目录
+      - 本地log目录:/var/log/higress/ # 重要，方便在容器restrat之后查看日志
     restart: always
   lobechat:
     image: lobehub/lobe-chat
@@ -110,7 +110,7 @@ services:
 
 ```
 
-主要更改了 Higress 的 image，environment 以及 volumes 的配置，启动和重启就是 `Docker compose up -d`，类似的不赘述了。
+主要更改了 Higress 的 image，environment 以及 volumes 的配置，启动和重启就是 `docker compose up -d`，类似的不赘述了。
 
 进一步地，我们需要了解本地代码编写的逻辑如何能反馈到测试环境中。
 
@@ -122,7 +122,7 @@ services:
 cd ${workspaceFolder}/higress/plugins/wasm-go
 PLUGIN_NAME=ai-cache EXTRA_TAGS=proxy_wasm_version_0_2_100 make build 
 修改版本号（version.txt）// 这步可以自动化更新，也就是说每次编译自动更新版本号，代码太简单就不在这写了
-export cur_version=$(cat ${workspaceFolder}/version.txt) && docker build -t [YOUR IMAGE BASE URL]:$cur_version -f Dockerfile . && docker push [YOUR IMAGE BASE URL]:$cur_version
+export cur_version=$(cat ${workspaceFolder}/version.txt) && docker build -t [YOUR IMAGE_BASE_URL]:$cur_version -f Dockerfile . && docker push [YOUR_IMAGE_BASE_URL]:$cur_version
 // 这步很重要，可以修改本地测试环境配置中的镜像版本，就不需要每次再去控制台修改了
 sudo bash -c \"sed -i 's|oci://registry.cn-hangzhou.aliyuncs.com/XXX:[0-9]*\\\\.[0-9]*\\\\.[0-9]*|oci://registry.cn-hangzhou.aliyuncs.com/XXX:$(cat version.txt)|g' data/wasmplugins/ai-cache-1.0.0.yaml\
 ```
@@ -138,10 +138,9 @@ sudo bash -c \"sed -i 's|oci://registry.cn-hangzhou.aliyuncs.com/XXX:[0-9]*\\\\.
 ```md
 1. query进来和redis中存的key匹配，若完全一致则直接返回
 2. 否则请求text_embdding接口将query转换为query_embedding
-3. 用quer_embedding和向量数据库中的向量做ANN search，返回最接近的key，并用阈值过滤
-4. 若大于阈值，舍去，本轮cache未命中
+3. 用query_embedding和向量数据库中的向量做ANN search，返回最接近的key，并用阈值过滤
+4. 若返回结果为空或大于阈值，舍去，本轮cache未命中, 最后将query_embedding存入向量数据库
 5. 若小于阈值，则再次调用redis对新key做匹配。
-6. 在response阶段请求向量数据库新增query/query_emebdding
 7. 在response阶段请求redis新增key/LLM返回结果
 ```
 
@@ -149,14 +148,14 @@ sudo bash -c \"sed -i 's|oci://registry.cn-hangzhou.aliyuncs.com/XXX:[0-9]*\\\\.
 
 可以看到，难点主要在于如何实现 1-5 的连续外部服务调用。在 Higress 相关的配置上，我们首先需要声明外部服务:
 
-```bash
+```go
 DashVectorClient      wrapper.HttpClient `yaml:"-" json:"-"`
 DashScopeClient       wrapper.HttpClient `yaml:"-" json:"-"`
 redisClient    wrapper.RedisClient `yaml:"-" json:"-"`
 ```
 
 并且在 `ParseConfig` 函数中注册外部服务：
-```bash
+```go
 c.DashVectorInfo.DashVectorClient = wrapper.NewClusterClient(wrapper.DnsCluster{
 	ServiceName: c.DashVectorInfo.DashVectorServiceName,
 	Port:        443,
