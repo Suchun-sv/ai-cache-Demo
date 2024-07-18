@@ -136,12 +136,12 @@ sudo bash -c \"sed -i 's|oci://registry.cn-hangzhou.aliyuncs.com/XXX:[0-9]*\\\\.
 全部的代码在 [github](https://github.com/Suchun-sv/ai-cache-Demo?spm=a2c22.21852664.0.0.45972df20aJlUt) 上，这里简单讲讲思路和核心代码。首先，本文采用的直观的思路是:
 
 ```md
-1. query进来和redis中存的key匹配，若完全一致则直接返回
-2. 否则请求text_embdding接口将query转换为query_embedding
-3. 用query_embedding和向量数据库中的向量做ANN search，返回最接近的key，并用阈值过滤
-4. 若返回结果为空或大于阈值，舍去，本轮cache未命中, 最后将query_embedding存入向量数据库
-5. 若小于阈值，则再次调用redis对新key做匹配。
-7. 在response阶段请求redis新增key/LLM返回结果
+1. query 进来和 redis 中存的 key 匹配 (redisSearchHandler) ，若完全一致则直接返回 (handleCacheHit)
+2. 否则请求 text_embdding 接口将 query 转换为 query_embedding (fetchAndProcessEmbeddings)
+3. 用 query_embedding 和向量数据库中的向量做 ANN search，返回最接近的 key ，并用阈值过滤 (performQueryAndRespond)
+4. 若返回结果为空或大于阈值，舍去，本轮 cache 未命中, 最后将 query_embedding 存入向量数据库 (uploadQueryEmbedding)
+5. 若小于阈值，则再次调用 redis对 most similar key 做匹配。 (redisSearchHandler)
+7. 在 response 阶段请求 redis 新增key/LLM返回结果
 ```
 
 ## 3.1 外部服务声明和注册
@@ -175,76 +175,163 @@ c.DashVectorInfo.DashScopeClient = wrapper.NewClusterClient(wrapper.DnsCluster{
 以 `onHttpRequestBody` 函数为例，代码需要写并发逻辑而非简单顺序逻辑。因而主体的函数代码是需要返回 `types.Action`，也就是声明阻塞还是继续执行。我们目前的逻辑需要在处理完缓存命中逻辑之后才能继续执行操作，因此主体函数需要返回 `types.pause`, 根据我们的处理逻辑调用的外部服务的回调函数中执行`proxywasm.ResumeHttpRequest()`或者直接返回`proxywasm.SendHttpResponse()`，取决于是否命中。
 
 ```go
-err := config.redisClient.Get(config.CacheKeyPrefix+key, func(response resp.Value) {
-	if err := response.Error(); err != nil || response.IsNull() {
-		if err != nil {
-			log.Warnf("redis get key:%s failed, err:%v", key, err)
-		}
-		if response.IsNull() {
-			log.Warnf("cache miss, key:%s", key)
-		}
-		// 回调函数1
-		config.DashVectorInfo.DashScopeClient.Post(
-			Emb_url,
-			Emb_headers,
-			Emb_requestBody,
-			func(statusCode int, responseHeaders http.Header, responseBody []byte) {
-				log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
-				if statusCode != 200 {
-					log.Errorf("Failed to fetch embeddings, statusCode: %d, responseBody: %s", statusCode, string(responseBody))
-					// result = nil
-					ctx.SetContext(QueryEmbeddingKey, nil)
-				} else {
-					// 回调函数2
-					config.redisClient.Set(config.CacheKeyPrefix+key, Text_embedding, func(response resp.Value) {
-						if err := response.Error(); err != nil {
-							log.Warnf("redis set key:%s failed, err:%v", key, err)
-							proxywasm.ResumeHttpRequest() // 未命中，取消暂停，继续请求
-							return
-						}
-						log.Infof("Successfully set key:%s", key)
-						// 确认存了之后继续和database交互
-						vector_url, vector_request, vector_headers, err := PerformQuery(config, Text_embedding)
-						if err != nil {
-							log.Errorf("Failed to perform query, err: %v", err)
-							proxywasm.ResumeHttpRequest() // 未命中，取消暂停，继续请求
-							return
-						}
-						// config.DashVectorInfo.DashVectorClient.Post(
-						config.DashVectorInfo.DashVectorClient.Post(
-							vector_url,
-							vector_headers,
-							vector_request,
-							...
-										// 回调函数三
-								if !stream {
-									proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, most_similar_key)), -1)
-								} else {
-									proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, most_similar_key)), -1)
-								} // 命中了，直接返回命中key对应的value
-								proxywasm.ResumeHttpRequest()
-							},
-							100000)
-					})
-				}
-			},
-			10000)
-	} else {
-		log.Warnf("cache hit, key:%s", key)
-		ctx.SetContext(CacheKeyContextKey, nil)
-		// 命中了，直接返回命中key对应的value
-		if !stream {
-			proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, response.String())), -1)
+// ===================== 以下是主要逻辑 =====================
+// 主handler函数，根据key从redis中获取value ，如果不命中，则首先调用文本向量化接口向量化query，然后调用向量搜索接口搜索最相似的出现过的key，最后再次调用redis获取结果
+// 可以把所有handler单独提取为文件，这里为了方便读者复制就和主逻辑放在一个文件中了
+// 
+// 1. query 进来和 redis 中存的 key 匹配 (redisSearchHandler) ，若完全一致则直接返回 (handleCacheHit)
+// 2. 否则请求 text_embdding 接口将 query 转换为 query_embedding (fetchAndProcessEmbeddings)
+// 3. 用 query_embedding 和向量数据库中的向量做 ANN search，返回最接近的 key ，并用阈值过滤 (performQueryAndRespond)
+// 4. 若返回结果为空或大于阈值，舍去，本轮 cache 未命中, 最后将 query_embedding 存入向量数据库 (uploadQueryEmbedding)
+// 5. 若小于阈值，则再次调用 redis对 most similar key 做匹配。 (redisSearchHandler)
+// 7. 在 response 阶段请求 redis 新增key/LLM返回结果
+
+func redisSearchHandler(key string, ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log, stream bool, ifUseEmbedding bool) error {
+	err := config.redisClient.Get(config.CacheKeyPrefix+key, func(response resp.Value) {
+		if err := response.Error(); err == nil && !response.IsNull() {
+			log.Warnf("cache hit, key:%s", key)
+			handleCacheHit(key, response, stream, ctx, config, log)
 		} else {
-			proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, response.String())), -1)
+			log.Warnf("cache miss, key:%s", key)
+			if ifUseEmbedding {
+				handleCacheMiss(key, err, response, ctx, config, log, key, stream)
+			} else {
+				proxywasm.ResumeHttpRequest()
+				return
+			}
 		}
-	}
-})
-if err != nil {
-	log.Error("redis access failed")
-	return types.ActionContinue
+	})
+	return err
 }
-return types.ActionPause
+
+// 简单处理缓存命中的情况, 从redis中获取到value后，直接返回
+func handleCacheHit(key string, response resp.Value, stream bool, ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log) {
+	log.Warnf("cache hit, key:%s", key)
+	ctx.SetContext(CacheKeyContextKey, nil)
+	if !stream {
+		proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnResponseTemplate, response.String())), -1)
+	} else {
+		proxywasm.SendHttpResponse(200, [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}, []byte(fmt.Sprintf(config.ReturnStreamResponseTemplate, response.String())), -1)
+	}
+}
+
+// 处理缓存未命中的情况，调用fetchAndProcessEmbeddings函数向量化query
+func handleCacheMiss(key string, err error, response resp.Value, ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log, queryString string, stream bool) {
+	if err != nil {
+		log.Warnf("redis get key:%s failed, err:%v", key, err)
+	}
+	if response.IsNull() {
+		log.Warnf("cache miss, key:%s", key)
+	}
+	fetchAndProcessEmbeddings(key, ctx, config, log, queryString, stream)
+}
+
+// 调用文本向量化接口向量化query, 向量化成功后调用processFetchedEmbeddings函数处理向量化结果
+func fetchAndProcessEmbeddings(key string, ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log, queryString string, stream bool) {
+	Emb_url, Emb_requestBody, Emb_headers := ConstructTextEmbeddingParameters(&config, log, []string{queryString})
+	config.DashVectorInfo.DashScopeClient.Post(
+		Emb_url,
+		Emb_headers,
+		Emb_requestBody,
+		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+			// log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
+			log.Infof("Successfully fetched embeddings for key: %s", key)
+			if statusCode != 200 {
+				log.Errorf("Failed to fetch embeddings, statusCode: %d, responseBody: %s", statusCode, string(responseBody))
+				ctx.SetContext(QueryEmbeddingKey, nil)
+				proxywasm.ResumeHttpRequest()
+			} else {
+				processFetchedEmbeddings(key, responseBody, ctx, config, log, stream)
+			}
+		},
+		10000)
+}
+
+// 先将向量化的结果存入上下文ctx变量，其次发起向量搜索请求
+func processFetchedEmbeddings(key string, responseBody []byte, ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log, stream bool) {
+	text_embedding_raw, _ := ParseTextEmbedding(responseBody)
+	text_embedding := text_embedding_raw.Output.Embeddings[0].Embedding
+	// ctx.SetContext(CacheKeyContextKey, text_embedding)
+	ctx.SetContext(QueryEmbeddingKey, text_embedding)
+	ctx.SetContext(CacheKeyContextKey, key)
+	performQueryAndRespond(key, text_embedding, ctx, config, log, stream)
+}
+
+// 调用向量搜索接口搜索最相似的key，搜索成功后调用redisSearchHandler函数获取最相似的key的结果
+func performQueryAndRespond(key string, text_embedding []float64, ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log, stream bool) {
+	vector_url, vector_request, vector_headers, err := ConstructEmbeddingQueryParameters(config, text_embedding)
+	if err != nil {
+		log.Errorf("Failed to perform query, err: %v", err)
+		proxywasm.ResumeHttpRequest()
+		return
+	}
+	config.DashVectorInfo.DashVectorClient.Post(
+		vector_url,
+		vector_headers,
+		vector_request,
+		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+			log.Infof("statusCode:%d, responseBody:%s", statusCode, string(responseBody))
+			query_resp, err_query := ParseQueryResponse(responseBody)
+			if err_query != nil {
+				log.Errorf("Failed to parse response: %v", err)
+				proxywasm.ResumeHttpRequest()
+				return
+			}
+			if len(query_resp.Output) < 1 {
+				log.Warnf("query response is empty")
+				uploadQueryEmbedding(ctx, config, log, key, text_embedding)
+				return
+			}
+			most_similar_key := query_resp.Output[0].Fields["query"].(string)
+			log.Infof("most similar key:%s", most_similar_key)
+			most_similar_score := query_resp.Output[0].Score
+			if most_similar_score < 0.1 {
+				ctx.SetContext(CacheKeyContextKey, nil)
+				redisSearchHandler(most_similar_key, ctx, config, log, stream, false)
+			} else {
+				log.Infof("the most similar key's score is too high, key:%s, score:%f", most_similar_key, most_similar_score)
+				uploadQueryEmbedding(ctx, config, log, key, text_embedding)
+				proxywasm.ResumeHttpRequest()
+				return
+			}
+		},
+		100000)
+}
+
+// 未命中cache，则将新的query embedding和对应的key存入向量数据库
+func uploadQueryEmbedding(ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log, key string, text_embedding []float64) error {
+	vector_url, vector_body, err := ConsturctEmbeddingInsertParameters(&config, log, text_embedding, key)
+	if err != nil {
+		log.Errorf("Failed to construct embedding insert parameters: %v", err)
+		proxywasm.ResumeHttpRequest()
+		return nil
+	}
+	err = config.DashVectorInfo.DashVectorClient.Post(
+		vector_url,
+		[][2]string{
+			{"Content-Type", "application/json"},
+			{"dashvector-auth-token", config.DashVectorInfo.DashVectorKey},
+		},
+		vector_body,
+		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+			if statusCode != 200 {
+				log.Errorf("Failed to upload query embedding: %s", responseBody)
+			} else {
+				log.Infof("Successfully uploaded query embedding for key: %s", key)
+			}
+			proxywasm.ResumeHttpRequest()
+		},
+		10000,
+	)
+	if err != nil {
+		log.Errorf("Failed to upload query embedding: %v", err)
+		proxywasm.ResumeHttpRequest()
+		return nil
+	}
+	return nil
+}
+
+// ===================== 以上是主要逻辑 =====================
 ```
 
 另外，该逻辑只有在返回值为 `types.Action` 的函数中才能用，如`onHttpResponseBody` 这个流式处理的函数是没法类似地处理，只能保证请求发出去，但是因为没有阻塞操作，无法调用callback函数。如有需求，可以参照`wasm-go/pkg/wrapper/http_wrapper.go`加上信号变量修改。

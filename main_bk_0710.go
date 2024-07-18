@@ -34,8 +34,6 @@ func main() {
 		wrapper.ProcessResponseHeadersBy(onHttpResponseHeaders),
 		wrapper.ProcessStreamingResponseBodyBy(onHttpResponseBody),
 	)
-
-
 }
 
 // @Name ai-cache
@@ -255,7 +253,7 @@ func ParseQueryResponse(responseBody []byte) (*QueryResponse, error) {
 	return &resp, nil
 }
 
-func ConstructEmbeddingInsertParameters(c *PluginConfig, log wrapper.Log, text_embedding []float64, query string) (string, []byte, error) {
+func ConsturctEmbeddingInsertParameters(c *PluginConfig, log wrapper.Log, text_embedding []float64, query string) (string, []byte, error) {
 	// url := fmt.Sprintf("%s/%s/docs", c.DashVectorInfo.DashVectorAuthApiEnd, c.DashVectorInfo.DashVectorCollection)
 	url := "/v1/collections/" + c.DashVectorInfo.DashVectorCollection + "/docs"
 
@@ -505,7 +503,7 @@ func performQueryAndRespond(key string, text_embedding []float64, ctx wrapper.Ht
 
 // 未命中cache，则将新的query embedding和对应的key存入向量数据库
 func uploadQueryEmbedding(ctx wrapper.HttpContext, config PluginConfig, log wrapper.Log, key string, text_embedding []float64) error {
-	vector_url, vector_body, err := ConstructEmbeddingQueryParametersEmbeddingInsertParameters(&config, log, text_embedding, key)
+	vector_url, vector_body, err := ConsturctEmbeddingInsertParameters(&config, log, text_embedding, key)
 	if err != nil {
 		log.Errorf("Failed to construct embedding insert parameters: %v", err)
 		proxywasm.ResumeHttpRequest()
